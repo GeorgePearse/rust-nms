@@ -126,7 +126,7 @@ Benchmarks on M1 MacBook Pro using COCO train2017 dataset:
 
 **📊 [View Performance Trends →](benchmarks/README.md)**
 
-Performance is continuously tracked on every commit using real COCO annotations. Charts show time-series trends across different input sizes.
+Performance is continuously tracked on every commit using real COCO annotations (10% subset). The CI automatically **fails if performance regresses >5%**, ensuring speed never degrades silently. Charts show time-series trends across different input sizes.
 
 ## Testing
 

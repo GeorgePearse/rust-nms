@@ -30,6 +30,7 @@ except ImportError:
 
 COCO_ANNOTATIONS_URL = "http://images.cocodataset.org/annotations/annotations_trainval2017.zip"
 COCO_ANNOTATIONS_FILE = "instances_train2017.json"
+COCO_REDUCED_FILE = "instances_train2017_10pct.json"  # 10% reduced dataset
 
 
 def download_coco_annotations(cache_dir: Path) -> Path:
@@ -73,6 +74,62 @@ def download_coco_annotations(cache_dir: Path) -> Path:
     print(f"COCO annotations ready: {annotations_path}")
 
     return annotations_path
+
+
+def create_reduced_coco(cache_dir: Path, sample_rate: float = 0.1) -> Path:
+    """
+    Create a reduced COCO dataset (10% of images).
+
+    Args:
+        cache_dir: Directory containing COCO annotations
+        sample_rate: Fraction of images to keep (default: 0.1)
+
+    Returns:
+        Path to reduced COCO JSON file
+    """
+    import random
+
+    full_path = cache_dir / COCO_ANNOTATIONS_FILE
+    reduced_path = cache_dir / COCO_REDUCED_FILE
+
+    if reduced_path.exists():
+        print(f"Using existing reduced COCO dataset: {reduced_path}")
+        return reduced_path
+
+    print(f"Creating reduced COCO dataset ({sample_rate*100}% of images)...")
+
+    # Load full COCO
+    with open(full_path, 'r') as f:
+        coco = json.load(f)
+
+    # Sample images
+    random.seed(42)
+    n_sample = int(len(coco['images']) * sample_rate)
+    sampled_images = random.sample(coco['images'], n_sample)
+    sampled_image_ids = {img['id'] for img in sampled_images}
+
+    # Filter annotations
+    sampled_annotations = [
+        ann for ann in coco['annotations']
+        if ann['image_id'] in sampled_image_ids
+    ]
+
+    # Create reduced structure
+    reduced_coco = {
+        'info': coco.get('info', {}),
+        'licenses': coco.get('licenses', []),
+        'categories': coco['categories'],
+        'images': sampled_images,
+        'annotations': sampled_annotations,
+    }
+
+    # Save
+    with open(reduced_path, 'w') as f:
+        json.dump(reduced_coco, f)
+
+    print(f"✓ Created reduced dataset: {len(sampled_images):,} images, {len(sampled_annotations):,} annotations")
+
+    return reduced_path
 
 
 def load_coco_boxes_and_scores(annotations_path: Path, max_boxes: int = None) -> Tuple[np.ndarray, np.ndarray]:
@@ -225,13 +282,20 @@ def benchmark_mask_to_polygons(size: int, n_runs: int = 5) -> Dict[str, float]:
 
 def run_all_benchmarks() -> Dict[str, Any]:
     """Run all benchmarks and return results."""
-    print("Running benchmarks with COCO dataset...")
+    print("Running benchmarks with COCO dataset (10% subset)...")
     print("=" * 60)
 
     # Setup COCO data
     cache_dir = Path(__file__).parent / "coco_cache"
-    annotations_path = download_coco_annotations(cache_dir)
-    all_boxes, all_scores = load_coco_boxes_and_scores(annotations_path)
+
+    # Download full COCO first
+    full_annotations_path = download_coco_annotations(cache_dir)
+
+    # Create reduced dataset (10%)
+    reduced_annotations_path = create_reduced_coco(cache_dir, sample_rate=0.1)
+
+    # Use reduced dataset for benchmarks
+    all_boxes, all_scores = load_coco_boxes_and_scores(reduced_annotations_path)
 
     results = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -240,9 +304,12 @@ def run_all_benchmarks() -> Dict[str, Any]:
     }
 
     # NMS benchmarks with COCO data
-    nms_sizes = [1000, 10000, 50000, len(all_boxes)]  # Include full dataset
+    # Adjust sizes for 10% dataset (originally ~860k boxes, now ~86k)
+    max_boxes = len(all_boxes)
+    nms_sizes = [1000, 10000, max_boxes]  # Test with available data
+
     for n_boxes in nms_sizes:
-        if n_boxes > len(all_boxes):
+        if n_boxes > max_boxes:
             continue
 
         print(f"\nBenchmarking NMS with {n_boxes:,} COCO boxes...")

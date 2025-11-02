@@ -1,6 +1,6 @@
 # rust-nms Performance Benchmarks
 
-This directory contains the automated performance monitoring system for rust-nms. Benchmarks run on every PR and track performance trends over time using real COCO dataset annotations.
+This directory contains the automated performance monitoring system for rust-nms. Benchmarks run on every commit, automatically detect performance regressions, and track trends over time using real COCO dataset annotations (10% subset for faster execution).
 
 ## Performance Trends
 
@@ -52,11 +52,10 @@ The benchmarking system consists of:
 
 ## What Gets Benchmarked
 
-### NMS Operation (using COCO train2017 annotations)
+### NMS Operation (using COCO train2017 annotations, 10% subset)
 - **1,000 boxes**: Quick smoke test
 - **10,000 boxes**: Standard workload
-- **50,000 boxes**: Large-scale scenario
-- **Full dataset** (~860k boxes): Maximum stress test
+- **~86,000 boxes**: Full 10% subset (10% of original ~860k boxes)
 
 Each benchmark measures:
 - Average execution time (ms)
@@ -75,13 +74,36 @@ Each benchmark measures:
 - Throughput (megapixels/second)
 - Number of polygons extracted
 
+## Performance Regression Detection
+
+**All commits are automatically checked for performance regressions!**
+
+The CI workflow will **FAIL** if any benchmark is >5% slower than the baseline (latest main branch).
+
+Example output:
+```
+✓ nms_1000: 1.70ms → 1.75ms (+2.9%)
+✓ nms_10000: 82.0ms → 80.5ms (-1.8%)
+✗ mask_to_polygons_1024: 6050ms → 6500ms (+7.4%)
+
+❌ PERFORMANCE REGRESSION DETECTED
+  mask_to_polygons_1024: 6050.00ms → 6500.00ms (+7.4%)
+```
+
+This ensures performance never degrades silently. If you need to make a trade-off (e.g., correctness over speed), document it in the PR description.
+
 ## CI/CD Integration
 
 Benchmarks run automatically on every commit via GitHub Actions:
 
-1. **On every commit**: Runs comprehensive benchmarks using COCO dataset
-2. **On PR commits**: Posts performance comparison comment showing changes vs main
-3. **On commits to main**: Updates `history.json` and regenerates performance charts
+1. **On every commit**:
+   - Runs comprehensive benchmarks using COCO dataset (10% subset)
+   - **Fails if performance regressed >5%**
+   - Posts performance comparison comment on PRs
+
+2. **On commits to main**:
+   - Updates `history.json` and regenerates performance charts
+   - Auto-commits results back to repo
 
 The charts are committed back to the repository so you can view performance trends directly in this README.
 
@@ -162,11 +184,22 @@ If your PR shows performance regressions:
 
 ## COCO Dataset
 
-The benchmarks use COCO train2017 annotations for realistic testing:
+The benchmarks use a **10% subset** of COCO train2017 annotations for faster execution:
+
+**Full Dataset** (downloaded once):
 - **Source**: http://images.cocodataset.org/annotations/annotations_trainval2017.zip
 - **Size**: ~250MB (annotations only, no images)
-- **Cached**: Downloaded once to `benchmarks/coco_cache/`
-- **Format**: JSON with bounding boxes in `[x, y, width, height]` format
+- **Images**: ~118k, **Annotations**: ~860k boxes
+- **Cached**: `benchmarks/coco_cache/instances_train2017.json`
+
+**10% Subset** (used for benchmarks):
+- **Size**: ~25MB
+- **Images**: ~11.8k (random sample with seed=42)
+- **Annotations**: ~86k boxes from sampled images
+- **Cached**: `benchmarks/coco_cache/instances_train2017_10pct.json`
+- **Valid COCO format**: Maintains all categories, licenses, and structure
+
+The subset is created automatically on first run by sampling 10% of images and keeping only annotations for those images. This provides realistic data while keeping benchmark times reasonable (~30-60 seconds vs 5+ minutes for full dataset).
 
 ## Troubleshooting
 

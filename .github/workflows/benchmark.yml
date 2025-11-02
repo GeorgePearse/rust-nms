@@ -54,6 +54,77 @@ jobs:
         run: |
           cp benchmarks/latest_benchmark.json /tmp/current_benchmark.json
 
+      # Performance regression check (runs on all commits)
+      - name: Check for performance regression
+        run: |
+          # Get baseline from main branch
+          git fetch origin main:main || true
+          git show main:benchmarks/history.json > /tmp/main_history.json 2>/dev/null || echo "[]" > /tmp/main_history.json
+
+          python3 << 'EOF'
+          import json
+          import sys
+
+          REGRESSION_THRESHOLD = 0.05  # Fail if >5% slower
+
+          # Load current benchmark
+          with open('/tmp/current_benchmark.json', 'r') as f:
+              current = json.load(f)
+
+          # Load main history
+          with open('/tmp/main_history.json', 'r') as f:
+              main_history = json.load(f)
+
+          if not main_history:
+              print("✓ No baseline data available. Skipping regression check.")
+              sys.exit(0)
+
+          baseline = main_history[-1]
+
+          # Check for regressions
+          regressions = []
+          print("Checking for performance regressions (threshold: >5% slower)...")
+          print()
+
+          for bench_name in sorted(current['benchmarks'].keys()):
+              curr_data = current['benchmarks'][bench_name]
+              base_data = baseline['benchmarks'].get(bench_name, {})
+
+              if not base_data or 'time_ms' not in curr_data or 'time_ms' not in base_data:
+                  continue
+
+              curr_time = curr_data['time_ms']
+              base_time = base_data['time_ms']
+              change = (curr_time - base_time) / base_time
+
+              status = "✓" if change <= REGRESSION_THRESHOLD else "✗"
+              print(f"{status} {bench_name}: {base_time:.2f}ms → {curr_time:.2f}ms ({change*100:+.1f}%)")
+
+              if change > REGRESSION_THRESHOLD:
+                  regressions.append({
+                      'name': bench_name,
+                      'baseline': base_time,
+                      'current': curr_time,
+                      'change_pct': change * 100
+                  })
+
+          if regressions:
+              print()
+              print("=" * 60)
+              print("❌ PERFORMANCE REGRESSION DETECTED")
+              print("=" * 60)
+              for reg in regressions:
+                  print(f"  {reg['name']}: {reg['baseline']:.2f}ms → {reg['current']:.2f}ms ({reg['change_pct']:+.1f}%)")
+              print()
+              print(f"Baseline commit: {baseline['commit'][:8]}")
+              print(f"Current commit:  {current['commit'][:8]}")
+              sys.exit(1)
+          else:
+              print()
+              print("✅ No performance regressions detected!")
+              sys.exit(0)
+          EOF
+
       # For pull requests: Compare with main branch
       - name: Compare with main (PR only)
         if: github.event_name == 'pull_request'
