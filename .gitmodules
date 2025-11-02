@@ -1,0 +1,3 @@
+[submodule "references/Modern-Cpp-NMS"]
+	path = references/Modern-Cpp-NMS
+	url = https://github.com/developer0hye/Modern-Cpp-NMS

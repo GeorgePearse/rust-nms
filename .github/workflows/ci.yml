@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test:
+    name: Test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12']
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Set up Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        profile: minimal
+        toolchain: stable
+        override: true
+
+    - name: Install maturin
+      run: pip install maturin
+
+    - name: Run Rust tests
+      run: cargo test --verbose
+
+    - name: Build Python package
+      run: maturin develop --release
+
+    - name: Install test dependencies
+      run: pip install numpy matplotlib
+
+    - name: Run Python tests
+      run: python test_nms.py
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        profile: minimal
+        toolchain: stable
+        override: true
+        components: rustfmt, clippy
+
+    - name: Check formatting
+      run: cargo fmt -- --check
+
+    - name: Run clippy
+      run: cargo clippy -- -D warnings
+
+  build-wheels:
+    name: Build wheels
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install maturin
+      run: pip install maturin
+
+    - name: Build wheels
+      run: maturin build --release
+
+    - name: Upload wheels
+      uses: actions/upload-artifact@v3
+      with:
+        name: wheels
+        path: target/wheels/
