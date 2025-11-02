@@ -58,6 +58,7 @@ def download_coco_annotations(cache_dir: Path) -> Path:
 
     # Extract
     import zipfile
+    import shutil
     with zipfile.ZipFile(zip_path, 'r') as zip_ref:
         zip_ref.extractall(cache_dir)
 
@@ -65,8 +66,8 @@ def download_coco_annotations(cache_dir: Path) -> Path:
     extracted_path = cache_dir / "annotations" / COCO_ANNOTATIONS_FILE
     if extracted_path.exists():
         extracted_path.rename(annotations_path)
-        # Clean up
-        (cache_dir / "annotations").rmdir()
+        # Clean up annotations directory
+        shutil.rmtree(cache_dir / "annotations", ignore_errors=True)
 
     zip_path.unlink()
     print(f"COCO annotations ready: {annotations_path}")
