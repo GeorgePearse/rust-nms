@@ -32,7 +32,9 @@ jobs:
           pip install -r benchmarks/requirements.txt
 
       - name: Build rust-nms (release mode)
-        run: maturin develop --release
+        run: |
+          maturin build --release
+          pip install target/wheels/rust_nms-*.whl
 
       - name: Run benchmarks
         id: run_bench
