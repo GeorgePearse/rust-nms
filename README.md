@@ -43,20 +43,15 @@ pip install target/wheels/rust_nms-*.whl
 import numpy as np
 import rust_nms
 
-# Bounding boxes: [x1, y1, x2, y2]
 boxes = np.array([
     [0.0, 0.0, 10.0, 10.0],
     [1.0, 1.0, 11.0, 11.0],
     [50.0, 50.0, 60.0, 60.0],
 ], dtype=np.float32)
 
-# Confidence scores
 scores = np.array([0.9, 0.8, 0.95], dtype=np.float32)
 
-# Run NMS
 keep_indices = rust_nms.nms(boxes, scores, iou_threshold=0.5)
-
-# Filter boxes
 filtered_boxes = boxes[keep_indices]
 filtered_scores = scores[keep_indices]
 ```
@@ -67,22 +62,14 @@ filtered_scores = scores[keep_indices]
 import numpy as np
 import rust_nms
 
-# Create a soft mask (e.g., from a segmentation model)
 mask = np.zeros((100, 100), dtype=np.float32)
-mask[20:80, 20:80] = 0.9  # High confidence region
-mask[10:30, 10:30] = 0.6  # Medium confidence region
+mask[20:80, 20:80] = 0.9
+mask[10:30, 10:30] = 0.6
 
-# Convert to polygons
-polygons = rust_nms.mask_to_polygons(
-    mask,
-    threshold=0.5,     # Binarization threshold
-    min_area=10        # Minimum polygon area in pixels
-)
+polygons = rust_nms.mask_to_polygons(mask, threshold=0.5, min_area=10)
 
-# Each polygon is a list of (x, y) points
-for i, poly in enumerate(polygons):
-    print(f"Polygon {i}: {len(poly)} points")
-    # poly is a list of tuples: [(x1, y1), (x2, y2), ...]
+for poly in polygons:
+    print(f"{len(poly)} points: {poly[:3]}...")
 ```
 
 ## API Reference
