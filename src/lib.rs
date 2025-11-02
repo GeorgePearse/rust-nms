@@ -1,7 +1,7 @@
 use pyo3::prelude::*;
 use pyo3::exceptions::PyValueError;
-use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
-use ndarray::{Array1, Array2, ArrayView1, ArrayView2, s};
+use numpy::{PyArray1, PyReadonlyArray1, PyReadonlyArray2};
+use ndarray::{Array2, ArrayView1, ArrayView2};
 
 /// Bounding box representation
 #[derive(Debug, Clone, Copy)]
