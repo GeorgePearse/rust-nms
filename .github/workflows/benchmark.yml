@@ -65,7 +65,7 @@ jobs:
           import json
           import sys
 
-          REGRESSION_THRESHOLD = 0.05  # Fail if >5% slower
+          IMPROVEMENT_THRESHOLD = 0.05  # Fail if NOT at least 5% faster
 
           # Load current benchmark
           with open('/tmp/current_benchmark.json', 'r') as f:
@@ -76,14 +76,14 @@ jobs:
               main_history = json.load(f)
 
           if not main_history:
-              print("✓ No baseline data available. Skipping regression check.")
+              print("✓ No baseline data available. Skipping performance check.")
               sys.exit(0)
 
           baseline = main_history[-1]
 
-          # Check for regressions
-          regressions = []
-          print("Checking for performance regressions (threshold: >5% slower)...")
+          # Check for improvements
+          failures = []
+          print("Checking for performance improvements (required: ≥5% faster)...")
           print()
 
           for bench_name in sorted(current['benchmarks'].keys()):
@@ -96,32 +96,37 @@ jobs:
               curr_time = curr_data['time_ms']
               base_time = base_data['time_ms']
               change = (curr_time - base_time) / base_time
+              improvement = -change  # Negative change = improvement (faster)
 
-              status = "✓" if change <= REGRESSION_THRESHOLD else "✗"
-              print(f"{status} {bench_name}: {base_time:.2f}ms → {curr_time:.2f}ms ({change*100:+.1f}%)")
+              status = "✓" if improvement >= IMPROVEMENT_THRESHOLD else "✗"
+              print(f"{status} {bench_name}: {base_time:.2f}ms → {curr_time:.2f}ms ({change*100:+.1f}%) [improvement: {improvement*100:.1f}%]")
 
-              if change > REGRESSION_THRESHOLD:
-                  regressions.append({
+              if improvement < IMPROVEMENT_THRESHOLD:
+                  failures.append({
                       'name': bench_name,
                       'baseline': base_time,
                       'current': curr_time,
-                      'change_pct': change * 100
+                      'change_pct': change * 100,
+                      'improvement_pct': improvement * 100
                   })
 
-          if regressions:
+          if failures:
               print()
               print("=" * 60)
-              print("❌ PERFORMANCE REGRESSION DETECTED")
+              print("❌ INSUFFICIENT PERFORMANCE IMPROVEMENT")
               print("=" * 60)
-              for reg in regressions:
-                  print(f"  {reg['name']}: {reg['baseline']:.2f}ms → {reg['current']:.2f}ms ({reg['change_pct']:+.1f}%)")
+              print("All benchmarks must be at least 5% faster than baseline.")
+              print()
+              for fail in failures:
+                  print(f"  {fail['name']}: {fail['baseline']:.2f}ms → {fail['current']:.2f}ms")
+                  print(f"    Required: ≥5.0% faster, Actual: {fail['improvement_pct']:.1f}% {'faster' if fail['improvement_pct'] > 0 else 'slower'}")
               print()
               print(f"Baseline commit: {baseline['commit'][:8]}")
               print(f"Current commit:  {current['commit'][:8]}")
               sys.exit(1)
           else:
               print()
-              print("✅ No performance regressions detected!")
+              print("✅ All benchmarks improved by ≥5%!")
               sys.exit(0)
           EOF
 
