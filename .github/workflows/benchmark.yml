@@ -26,6 +26,14 @@ jobs:
         with:
           toolchain: stable
 
+      - name: Cache COCO annotations
+        uses: actions/cache@v3
+        with:
+          path: benchmarks/coco_cache
+          key: coco-annotations-${{ hashFiles('benchmarks/run_benchmarks.py') }}
+          restore-keys: |
+            coco-annotations-
+
       - name: Install dependencies
         run: |
           pip install maturin
