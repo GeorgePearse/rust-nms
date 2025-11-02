@@ -117,12 +117,16 @@ Convert soft segmentation mask to polygon contours.
 
 ## Performance
 
-Benchmarks on M1 MacBook Pro:
+Benchmarks on M1 MacBook Pro using COCO train2017 dataset:
 
 | Operation | Input Size | Time | Throughput |
 |-----------|-----------|------|------------|
 | NMS | 10,000 boxes | ~15ms | ~660k boxes/sec |
 | Mask to Polygons | 1024×1024 | ~5ms | ~200 megapixels/sec |
+
+**📊 [View Performance Trends →](benchmarks/README.md)**
+
+Performance is continuously tracked on every commit using real COCO annotations. Charts show time-series trends across different input sizes.
 
 ## Testing
 

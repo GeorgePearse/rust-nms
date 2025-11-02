@@ -42,10 +42,13 @@ env/
 # Maturin
 *.whl
 
-# Test outputs
+# Test outputs (but not benchmark charts)
 *.png
+!benchmarks/*.png
 *.jpg
 *.pdf
 
-# Benchmarks
-benchmarks/
+# Benchmark cache and temporary files
+benchmarks/coco_cache/
+benchmarks/latest_benchmark.json
+benchmarks/benchmark_output.txt

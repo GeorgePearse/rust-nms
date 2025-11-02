@@ -4,6 +4,7 @@ use numpy::{PyArray1, PyReadonlyArray1, PyReadonlyArray2};
 use ndarray::{Array2, ArrayView1, ArrayView2};
 
 /// Bounding box representation
+/// Performance is continuously tracked via automated benchmarks
 #[derive(Debug, Clone, Copy)]
 struct BBox {
     x1: f32,

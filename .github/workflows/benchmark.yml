@@ -1,0 +1,238 @@
+name: Performance Benchmarks
+
+on:
+  push:  # Run on every commit to any branch
+  pull_request:  # Also run on PRs for comparison comments
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0  # Fetch full history for git operations
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Install dependencies
+        run: |
+          pip install maturin
+          pip install -r benchmarks/requirements.txt
+
+      - name: Build rust-nms (release mode)
+        run: maturin develop --release
+
+      - name: Run benchmarks
+        id: run_bench
+        run: |
+          cd benchmarks
+          python run_benchmarks.py > benchmark_output.txt 2>&1
+          cat benchmark_output.txt
+
+      - name: Save benchmark results
+        run: |
+          cp benchmarks/latest_benchmark.json /tmp/current_benchmark.json
+
+      # For pull requests: Compare with main branch
+      - name: Compare with main (PR only)
+        if: github.event_name == 'pull_request'
+        run: |
+          # Checkout main branch history.json
+          git fetch origin main:main
+          git show main:benchmarks/history.json > /tmp/main_history.json || echo "[]" > /tmp/main_history.json
+
+          # Create comparison script
+          python3 << 'EOF'
+          import json
+          import sys
+
+          # Load current benchmark
+          with open('/tmp/current_benchmark.json', 'r') as f:
+              current = json.load(f)
+
+          # Load main history
+          with open('/tmp/main_history.json', 'r') as f:
+              main_history = json.load(f)
+
+          if not main_history:
+              print("No baseline data available. This is the first benchmark run.")
+              sys.exit(0)
+
+          baseline = main_history[-1]  # Most recent main benchmark
+
+          # Generate comparison report
+          report = "## 📊 Performance Benchmark Results\n\n"
+          report += f"**Baseline:** `{baseline['commit'][:8]}` (main)\n"
+          report += f"**Current:** `{current['commit'][:8]}` ({current['branch']})\n\n"
+
+          # Compare NMS benchmarks
+          report += "### NMS Performance\n\n"
+          report += "| Input Size | Baseline (ms) | Current (ms) | Change | Throughput |\n"
+          report += "|------------|---------------|--------------|--------|------------|\n"
+
+          for bench_name in sorted(current['benchmarks'].keys()):
+              if not bench_name.startswith('nms_'):
+                  continue
+
+              curr_data = current['benchmarks'][bench_name]
+              base_data = baseline['benchmarks'].get(bench_name, {})
+
+              if not base_data:
+                  continue
+
+              curr_time = curr_data['time_ms']
+              base_time = base_data['time_ms']
+              change_pct = ((curr_time - base_time) / base_time) * 100
+
+              # Format change with emoji
+              if abs(change_pct) < 2:
+                  emoji = "➡️"
+                  color = ""
+              elif change_pct < 0:
+                  emoji = "⬇️"
+                  color = ""  # Faster is better
+              else:
+                  emoji = "⬆️"
+                  color = ""  # Slower is worse
+
+              throughput = f"{curr_data['throughput_boxes_per_sec']/1000:.0f}k boxes/s"
+              report += f"| {curr_data['n_boxes']:,} boxes | {base_time:.2f} | {curr_time:.2f} | {emoji} {change_pct:+.1f}% | {throughput} |\n"
+
+          # Compare mask benchmarks
+          report += "\n### Mask to Polygons Performance\n\n"
+          report += "| Image Size | Baseline (ms) | Current (ms) | Change | Throughput |\n"
+          report += "|------------|---------------|--------------|--------|------------|\n"
+
+          for bench_name in sorted(current['benchmarks'].keys()):
+              if not bench_name.startswith('mask_to_polygons_'):
+                  continue
+
+              curr_data = current['benchmarks'][bench_name]
+              base_data = baseline['benchmarks'].get(bench_name, {})
+
+              if not base_data:
+                  continue
+
+              curr_time = curr_data['time_ms']
+              base_time = base_data['time_ms']
+              change_pct = ((curr_time - base_time) / base_time) * 100
+
+              # Format change with emoji
+              if abs(change_pct) < 2:
+                  emoji = "➡️"
+              elif change_pct < 0:
+                  emoji = "⬇️"
+              else:
+                  emoji = "⬆️"
+
+              throughput = f"{curr_data['throughput_megapixels_per_sec']:.1f} MP/s"
+              report += f"| {curr_data['size']} | {base_time:.2f} | {curr_time:.2f} | {emoji} {change_pct:+.1f}% | {throughput} |\n"
+
+          report += "\n---\n"
+          report += "*Benchmarks run on COCO train2017 dataset*\n"
+
+          # Save report
+          with open('/tmp/pr_comment.md', 'w') as f:
+              f.write(report)
+
+          print(report)
+          EOF
+
+      - name: Post PR comment
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+
+            let comment;
+            try {
+              comment = fs.readFileSync('/tmp/pr_comment.md', 'utf8');
+            } catch (err) {
+              console.log('No comparison report found, skipping comment');
+              return;
+            }
+
+            // Find existing benchmark comment
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const botComment = comments.data.find(c =>
+              c.user.type === 'Bot' && c.body.includes('Performance Benchmark Results')
+            );
+
+            if (botComment) {
+              // Update existing comment
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: comment
+              });
+            } else {
+              // Create new comment
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: comment
+              });
+            }
+
+      # For main branch: Update history and regenerate charts
+      - name: Update benchmark history (main only)
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+        run: |
+          cd benchmarks
+
+          # Append to history
+          python3 << 'EOF'
+          import json
+
+          # Load current benchmark
+          with open('latest_benchmark.json', 'r') as f:
+              current = json.load(f)
+
+          # Load history
+          try:
+              with open('history.json', 'r') as f:
+                  history = json.load(f)
+          except FileNotFoundError:
+              history = []
+
+          # Append current to history
+          history.append(current)
+
+          # Save updated history
+          with open('history.json', 'w') as f:
+              json.dump(history, f, indent=2)
+
+          print(f"Added benchmark to history. Total entries: {len(history)}")
+          EOF
+
+          # Generate updated charts
+          python generate_dashboard.py
+
+          # Configure git
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Commit and push
+          git add history.json nms_performance.png mask_performance.png
+          git commit -m "Update performance benchmarks [skip ci]" || echo "No changes to commit"
+          git push || echo "Nothing to push"
