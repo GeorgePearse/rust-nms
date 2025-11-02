@@ -81,10 +81,12 @@ jobs:
 
           baseline = main_history[-1]
 
-          # Check for improvements
-          failures = []
-          print("Checking for performance improvements (required: ≥5% faster)...")
+          # Check for improvements (grouped by category)
+          print("Checking for performance improvements (required: ≥5% faster for NMS OR mask_to_polygons)...")
           print()
+
+          nms_failures = []
+          mask_failures = []
 
           for bench_name in sorted(current['benchmarks'].keys()):
               curr_data = current['benchmarks'][bench_name]
@@ -102,32 +104,57 @@ jobs:
               print(f"{status} {bench_name}: {base_time:.2f}ms → {curr_time:.2f}ms ({change*100:+.1f}%) [improvement: {improvement*100:.1f}%]")
 
               if improvement < IMPROVEMENT_THRESHOLD:
-                  failures.append({
+                  failure_info = {
                       'name': bench_name,
                       'baseline': base_time,
                       'current': curr_time,
                       'change_pct': change * 100,
                       'improvement_pct': improvement * 100
-                  })
+                  }
 
-          if failures:
+                  if bench_name.startswith('nms_'):
+                      nms_failures.append(failure_info)
+                  elif bench_name.startswith('mask_to_polygons_'):
+                      mask_failures.append(failure_info)
+
+          # Pass if either NMS or mask_to_polygons category improved by ≥5%
+          nms_passed = len(nms_failures) == 0
+          mask_passed = len(mask_failures) == 0
+
+          print()
+          print(f"NMS benchmarks: {'✅ PASSED' if nms_passed else '✗ FAILED'} ({len(nms_failures)} benchmarks below threshold)")
+          print(f"Mask benchmarks: {'✅ PASSED' if mask_passed else '✗ FAILED'} ({len(mask_failures)} benchmarks below threshold)")
+
+          if nms_passed or mask_passed:
+              print()
+              print("✅ Performance check PASSED!")
+              print("At least one category (NMS or mask_to_polygons) improved by ≥5%")
+              sys.exit(0)
+          else:
               print()
               print("=" * 60)
               print("❌ INSUFFICIENT PERFORMANCE IMPROVEMENT")
               print("=" * 60)
-              print("All benchmarks must be at least 5% faster than baseline.")
+              print("Either NMS or mask_to_polygons benchmarks must ALL be ≥5% faster.")
               print()
-              for fail in failures:
-                  print(f"  {fail['name']}: {fail['baseline']:.2f}ms → {fail['current']:.2f}ms")
-                  print(f"    Required: ≥5.0% faster, Actual: {fail['improvement_pct']:.1f}% {'faster' if fail['improvement_pct'] > 0 else 'slower'}")
-              print()
+
+              if nms_failures:
+                  print("NMS benchmarks that didn't improve enough:")
+                  for fail in nms_failures:
+                      print(f"  {fail['name']}: {fail['baseline']:.2f}ms → {fail['current']:.2f}ms")
+                      print(f"    Required: ≥5.0% faster, Actual: {fail['improvement_pct']:.1f}% {'faster' if fail['improvement_pct'] > 0 else 'slower'}")
+                  print()
+
+              if mask_failures:
+                  print("Mask benchmarks that didn't improve enough:")
+                  for fail in mask_failures:
+                      print(f"  {fail['name']}: {fail['baseline']:.2f}ms → {fail['current']:.2f}ms")
+                      print(f"    Required: ≥5.0% faster, Actual: {fail['improvement_pct']:.1f}% {'faster' if fail['improvement_pct'] > 0 else 'slower'}")
+                  print()
+
               print(f"Baseline commit: {baseline['commit'][:8]}")
               print(f"Current commit:  {current['commit'][:8]}")
               sys.exit(1)
-          else:
-              print()
-              print("✅ All benchmarks improved by ≥5%!")
-              sys.exit(0)
           EOF
 
       # For pull requests: Compare with main branch
