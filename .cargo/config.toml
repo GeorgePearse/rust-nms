@@ -1,0 +1,7 @@
+# Cargo configuration
+
+# Alias for running benchmarks without Python bindings
+# This is needed because the default features include PyO3's extension-module
+# feature, which prevents linking Python symbols for Rust-only benchmarks.
+[alias]
+bench-rust = "bench --no-default-features"
