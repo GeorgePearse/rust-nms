@@ -5,12 +5,33 @@ edition = "2021"
 
 [lib]
 name = "rust_nms"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-pyo3 = { version = "0.20", features = ["extension-module"] }
-numpy = "0.20"
+pyo3 = { version = "0.20", features = ["extension-module"], optional = true }
+numpy = { version = "0.20", optional = true }
 ndarray = "0.15"
+rayon = "1.8"
+itertools = "0.12"
+bitvec = "1.0"
+#packed_simd = { version = "0.3.8", package = "packed_simd_2" }
+crossbeam-channel = "0.5"
+crossbeam-utils = "0.8"
+num_cpus = "1.16"
+
+[features]
+default = ["python"]
+python = ["pyo3", "numpy"]
+
+[dev-dependencies]
+divan = "0.1.4"
+rand = "0.8.5"
+rand_chacha = "0.3.1"
+
+[[bench]]
+name = "nms_bench"
+harness = false
+required-features = []
 
 [profile.release]
 lto = true

@@ -134,6 +134,56 @@ Run Rust tests:
 cargo test
 ```
 
+## Benchmarking
+
+Run Rust benchmarks:
+
+```bash
+# Option 1: Use the cargo alias (recommended)
+cargo bench-rust
+
+# Option 2: Explicitly disable default features
+cargo bench --no-default-features
+```
+
+**Note:** The default `cargo bench` will fail with linking errors because the Python extension module features are incompatible with Rust-only benchmarks. Always use `--no-default-features` or the `bench-rust` alias when running benchmarks manually.
+
+## Development Setup
+
+### Pre-commit Performance Validation
+
+This project uses Git pre-commit hooks to ensure code quality and performance:
+
+**What it does:**
+1. Runs all tests (`cargo test`)
+2. Compares benchmarks with your previous commit (HEAD~1)
+3. Blocks commits if tests fail or performance regresses
+
+**Installation:**
+
+```bash
+./scripts/install-hooks.sh
+```
+
+**Requirements:**
+- Every commit must pass all tests
+- Every commit must show measurable performance improvement (any improvement >0%)
+- Benchmarks are compared against the previous commit using `cargo bench`
+
+**Bypass in emergencies:**
+
+```bash
+git commit --no-verify  # Not recommended
+```
+
+**How it works:**
+- The hook runs `cargo bench --baseline previous` to compare your changes
+- First commit in a branch skips comparison (no previous commit)
+- Takes ~30-60 seconds per commit (runs benchmarks twice)
+- Works with git worktrees
+
+**Note:** This is a local development tool. The CI also validates performance using real COCO data and fails if performance regresses >5%.
+
 ## Project Structure
 
 ```
