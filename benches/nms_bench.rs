@@ -148,3 +148,39 @@ fn bench_nms_baseline<const N: usize>(bencher: Bencher) {
     })
 }
 
+
+// Benchmark BOE-NMS (graph theory approach)
+#[divan::bench(
+    consts = [
+        1000, // Medium number of boxes
+        10000, // Large number of boxes
+    ],
+)]
+fn bench_nms_boe<const N: usize>(bencher: Bencher) {
+    use rust_nms::nms_impls::nms_boe;
+    let (boxes, scores) = generate_random_boxes(N, 42);
+    
+    bencher.bench(|| {
+        let boxes_view = black_box(boxes.view());
+        let scores_view = black_box(scores.view());
+        nms_boe(boxes_view, scores_view, 0.5, None)
+    })
+}
+
+// Benchmark QSI-NMS (graph theory divide-and-conquer)
+#[divan::bench(
+    consts = [
+        1000, // Medium number of boxes
+        10000, // Large number of boxes
+    ],
+)]
+fn bench_nms_qsi<const N: usize>(bencher: Bencher) {
+    use rust_nms::nms_impls::nms_qsi;
+    let (boxes, scores) = generate_random_boxes(N, 42);
+    
+    bencher.bench(|| {
+        let boxes_view = black_box(boxes.view());
+        let scores_view = black_box(scores.view());
+        nms_qsi(boxes_view, scores_view, 0.5, None)
+    })
+}

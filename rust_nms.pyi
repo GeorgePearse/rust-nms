@@ -8,16 +8,25 @@ def nms(
     max_detections: int = None,
 ) -> np.ndarray:
     """
-    Non-Maximum Suppression.
+    Non-Maximum Suppression for a single batch of boxes.
+
+    IMPORTANT: This function operates on a single batch. For video or multi-image
+    processing, you MUST call this function separately for each frame/image.
+    Mixing boxes from different frames will cause incorrect cross-frame suppression.
 
     Args:
         boxes: (N, 4) float32 array of [x1, y1, x2, y2]
         scores: (N,) float32 array of scores
-        iou_threshold: IoU threshold for suppression
+        iou_threshold: IoU threshold for suppression (default: 0.5)
         max_detections: Optional limit for maximum detections
 
     Returns:
         (K,) array of indices to keep
+
+    Example:
+        # Correct: Process each frame separately
+        for frame_boxes, frame_scores in zip(frames_boxes, frames_scores):
+            keep = nms(frame_boxes, frame_scores, iou_threshold=0.5)
     """
     ...
 
@@ -32,13 +41,18 @@ def multiclass_nms(
     parallel: bool = None,
 ) -> np.ndarray:
     """
-    Multi-class Non-Maximum Suppression.
+    Multi-class Non-Maximum Suppression for a single batch.
+
+    IMPORTANT: This function operates on a single batch. For video or multi-image
+    processing, you MUST call this function separately for each frame/image.
+    Do not concatenate boxes from different frames - this will cause incorrect
+    suppression across temporal boundaries.
 
     Args:
         boxes: (N, 4) float32 array of [x1, y1, x2, y2]
         scores: (N,) float32 array of scores
         class_ids: (N,) int32 array of class IDs
-        iou_threshold: IoU threshold for suppression
+        iou_threshold: IoU threshold for suppression within same class
         score_threshold: Optional minimum score threshold
         max_detections: Optional limit for maximum total detections across all classes
         max_detections_per_class: Optional limit for maximum detections per class
@@ -46,6 +60,16 @@ def multiclass_nms(
 
     Returns:
         (K,) array of indices to keep across all classes
+
+    Example:
+        # Correct: Process each video frame independently
+        for frame_id, frame_data in video_frames.items():
+            keep = multiclass_nms(
+                frame_data['boxes'],
+                frame_data['scores'],
+                frame_data['class_ids'],
+                iou_threshold=0.5
+            )
     """
     ...
 

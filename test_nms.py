@@ -352,3 +352,112 @@ if __name__ == "__main__":
     print("\n" + "=" * 60)
     print("All tests completed!")
     print("=" * 60)
+
+
+def test_video_frame_isolation():
+    """Test that demonstrates correct per-frame NMS processing for video"""
+    try:
+        import rust_nms
+    except ImportError:
+        print("rust_nms not installed. Run: maturin develop")
+        return
+
+    print("\n" + "=" * 60)
+    print("Testing Video Frame Isolation")
+    print("=" * 60)
+
+    # Simulate detections from 3 consecutive video frames
+    # Note: Same box positions appear in different frames (e.g., tracking an object)
+    frames = {
+        0: {  # Frame 0
+            'boxes': np.array([
+                [100, 100, 200, 200],  # Person walking
+                [105, 105, 205, 205],  # Duplicate detection (should be suppressed)
+            ], dtype=np.float32),
+            'scores': np.array([0.9, 0.85], dtype=np.float32),
+            'class_ids': np.array([1, 1], dtype=np.int32)
+        },
+        1: {  # Frame 1 (person moved slightly)
+            'boxes': np.array([
+                [110, 110, 210, 210],  # Same person, slightly moved
+                [115, 115, 215, 215],  # Duplicate detection
+            ], dtype=np.float32),
+            'scores': np.array([0.88, 0.82], dtype=np.float32),
+            'class_ids': np.array([1, 1], dtype=np.int32)
+        },
+        2: {  # Frame 2 (person moved more)
+            'boxes': np.array([
+                [120, 120, 220, 220],  # Same person, moved more
+                [125, 125, 225, 225],  # Duplicate detection
+            ], dtype=np.float32),
+            'scores': np.array([0.92, 0.87], dtype=np.float32),
+            'class_ids': np.array([1, 1], dtype=np.int32)
+        },
+    }
+
+    print("\n✓ CORRECT: Processing each frame independently")
+    per_frame_results = {}
+    for frame_id, frame_data in frames.items():
+        keep_indices = rust_nms.multiclass_nms(
+            frame_data['boxes'],
+            frame_data['scores'],
+            frame_data['class_ids'],
+            iou_threshold=0.5
+        )
+        per_frame_results[frame_id] = {
+            'kept_count': len(keep_indices),
+            'kept_indices': keep_indices
+        }
+        print(f"  Frame {frame_id}: {len(frame_data['boxes'])} boxes → {len(keep_indices)} kept")
+
+    # Each frame should keep 1 box (highest score, suppressing duplicate)
+    for frame_id, result in per_frame_results.items():
+        assert result['kept_count'] == 1, f"Frame {frame_id} should keep exactly 1 box"
+
+    print("\n✗ WRONG: What happens if you mix frames (DON'T DO THIS!)")
+    # This demonstrates the INCORRECT approach - mixing all frames
+    all_boxes = np.vstack([frame['boxes'] for frame in frames.values()])
+    all_scores = np.concatenate([frame['scores'] for frame in frames.values()])
+    all_class_ids = np.concatenate([frame['class_ids'] for frame in frames.values()])
+
+    wrong_keep = rust_nms.multiclass_nms(
+        all_boxes, all_scores, all_class_ids, iou_threshold=0.5
+    )
+    print(f"  Mixed frames: {len(all_boxes)} boxes → {len(wrong_keep)} kept")
+    print(f"  ⚠️  This is WRONG! Boxes from different frames should not suppress each other!")
+    print(f"  ⚠️  A person in frame 0 shouldn't suppress the same person in frame 2!")
+
+    # The wrong approach likely keeps fewer boxes than correct per-frame processing
+    total_correct = sum(r['kept_count'] for r in per_frame_results.values())
+    print(f"\n  Correct per-frame: {total_correct} total boxes across {len(frames)} frames")
+    print(f"  Incorrect mixed: {len(wrong_keep)} boxes (lost {total_correct - len(wrong_keep)} valid detections!)")
+
+    print("\n✓ Video frame isolation test completed!")
+    print("  Remember: Always process video frames independently!")
+
+
+# Update the main block to include the new test
+if __name__ == "__main__":
+    print("=" * 60)
+    print("Testing rust_nms Python bindings")
+    print("=" * 60)
+
+    test_nms()
+    test_multiclass_nms()
+    test_mask_to_polygons()
+    test_video_frame_isolation()  # New test
+    benchmark_nms()
+    benchmark_multiclass_nms()
+
+    print("\n" + "=" * 60)
+    print("Optional: Generating visualizations")
+    print("=" * 60)
+    try:
+        visualize_nms()
+        visualize_mask_to_polygons()
+    except Exception as e:
+        print(f"Visualization skipped: {e}")
+
+    print("\n" + "=" * 60)
+    print("All tests completed!")
+    print("=" * 60)

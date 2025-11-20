@@ -74,7 +74,7 @@ for poly in polygons:
 
 ## API Reference
 
-### `nms(boxes, scores, iou_threshold=0.5)`
+### `nms(boxes, scores, iou_threshold=0.5, max_detections=None)`
 
 Non-Maximum Suppression for bounding boxes.
 
@@ -82,9 +82,23 @@ Non-Maximum Suppression for bounding boxes.
 - `boxes`: `np.ndarray[float32]` - Shape (N, 4), format [x1, y1, x2, y2]
 - `scores`: `np.ndarray[float32]` - Shape (N,), confidence scores
 - `iou_threshold`: `float` - IoU threshold for suppression (default: 0.5)
+- `max_detections`: `int` - Optional limit for maximum detections (default: None)
 
 **Returns:**
 - `np.ndarray[uint]` - Indices of boxes to keep
+
+**⚠️ Important:** NMS operates on a **single batch** of boxes. For video processing or multi-image scenarios, you **must** call NMS separately for each frame/image. Mixing boxes from different frames will cause incorrect suppression across frames.
+
+```python
+# ✓ CORRECT: Process each frame separately
+for frame_boxes, frame_scores in zip(all_frames_boxes, all_frames_scores):
+    keep = rust_nms.nms(frame_boxes, frame_scores, iou_threshold=0.5)
+    
+# ✗ WRONG: Don't mix boxes from different frames!
+all_boxes = np.concatenate(all_frames_boxes)
+all_scores = np.concatenate(all_frames_scores)
+keep = rust_nms.nms(all_boxes, all_scores, iou_threshold=0.5)  # INCORRECT!
+```
 
 ### `mask_to_polygons(mask, threshold=0.5, min_area=10)`
 
@@ -228,20 +242,109 @@ Converts probabilistic segmentation masks to vector polygons:
 - Follows 8-connected neighbors clockwise
 - Stops when returning to start point
 
+## Implementation Philosophy
+
+### Research-Oriented Development
+
+This repository maintains **multiple NMS implementations** side-by-side, even when some are slower than others. This is an intentional design decision:
+
+**Why keep old implementations?**
+
+- 🔬 **Research baseline**: Older implementations provide benchmarking baselines to quantify improvements
+- 📚 **Educational value**: Different optimization strategies demonstrate performance trade-offs
+- 🧪 **Experimentation**: Alternative approaches may perform better on different hardware or workloads
+- 📝 **Documentation**: Code serves as living documentation of what was tried and learned
+
+**Where are implementations?**
+
+- ⭐ **Primary/Production**: `src/lib.rs::nms_impl()` - The fastest, most optimized implementation
+- 🔬 **Research variants**: `src/nms_impls.rs` - Alternative implementations kept for comparison
+
+**Current optimizations in `nms_impl()`:**
+
+The production implementation incorporates multiple performance optimizations discovered through systematic experimentation:
+
+1. **Structure of Arrays (SoA)** layout for cache-friendly memory access
+2. **Spatial indexing** with grid-based filtering (n > 500 boxes)
+   - Reduces comparisons from O(n²) to O(n·k) where k is local density
+   - Adaptive cell padding and intelligent fallback heuristics
+3. **Immediate suppression marking** eliminates allocation overhead
+4. **Manual loop unrolling** (blocks of 4) for instruction-level parallelism
+5. **Unsafe operations** to eliminate bounds checks in hot paths
+6. **Early rejection tests** before expensive IoU calculations
+
+**Performance tracking:**
+
+Every commit is automatically benchmarked. The codebase must show measurable performance improvement to merge - no regressions allowed. This ensures the production implementation always represents our best-known approach.
+
+See [AGENTS.md](AGENTS.md) for detailed implementation notes and benchmarking requirements.
+
+## Video & Multi-Frame Processing
+
+**⚠️ Critical:** NMS must be applied **per-frame**. Never mix detections from different frames!
+
+Boxes from different frames exist in different temporal contexts and should never suppress each other, even if they have identical coordinates. Always process each frame independently:
+
+```python
+import numpy as np
+import rust_nms
+
+# Example: Processing video frames from an object detector
+video_detections = {
+    0: {  # Frame 0
+        'boxes': np.array([[10, 10, 50, 50], [15, 15, 55, 55]], dtype=np.float32),
+        'scores': np.array([0.9, 0.85], dtype=np.float32),
+        'class_ids': np.array([1, 1], dtype=np.int32)
+    },
+    1: {  # Frame 1
+        'boxes': np.array([[10, 10, 50, 50], [100, 100, 150, 150]], dtype=np.float32),
+        'scores': np.array([0.88, 0.92], dtype=np.float32),
+        'class_ids': np.array([1, 2], dtype=np.int32)
+    },
+    # ... more frames
+}
+
+# ✓ CORRECT: Process each frame independently
+results = {}
+for frame_id, detections in video_detections.items():
+    keep_indices = rust_nms.multiclass_nms(
+        detections['boxes'],
+        detections['scores'],
+        detections['class_ids'],
+        iou_threshold=0.5,
+        score_threshold=0.3
+    )
+    results[frame_id] = {
+        'boxes': detections['boxes'][keep_indices],
+        'scores': detections['scores'][keep_indices],
+        'class_ids': detections['class_ids'][keep_indices]
+    }
+
+# ✗ WRONG: Don't concatenate across frames!
+# This would allow frame 0 boxes to suppress frame 1 boxes!
+all_boxes = np.vstack([d['boxes'] for d in video_detections.values()])
+all_scores = np.concatenate([d['scores'] for d in video_detections.values()])
+all_class_ids = np.concatenate([d['class_ids'] for d in video_detections.values()])
+keep = rust_nms.multiclass_nms(all_boxes, all_scores, all_class_ids, 0.5)  # INCORRECT!
+```
+
+**Why?** A person standing at position (100, 100, 200, 200) in frame 1 should not suppress a different person at the same position in frame 50, even if they have similar scores. They are different detections in different temporal contexts.
+
 ## Use Cases
 
 ### Computer Vision
-- **Object Detection**: Post-process YOLO/Faster R-CNN detections
+- **Object Detection**: Post-process YOLO/Faster R-CNN detections (per-frame for video)
 - **Instance Segmentation**: Convert Mask R-CNN outputs to polygons
 - **Semantic Segmentation**: Extract object boundaries from soft masks
 
 ### Robotics
-- **Obstacle Detection**: Filter redundant bounding boxes
+- **Obstacle Detection**: Filter redundant bounding boxes in real-time streams
 - **Scene Understanding**: Convert probability maps to geometric shapes
 
 ### Medical Imaging
 - **Lesion Detection**: Remove overlapping candidate regions
 - **Organ Segmentation**: Extract precise boundaries from probability maps
+- **Video Endoscopy**: Process each frame independently for polyp detection
 
 ## References
 
