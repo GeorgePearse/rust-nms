@@ -1,41 +1,7 @@
 use pyo3::prelude::*;
 use pyo3::exceptions::PyValueError;
 use numpy::{PyArray1, PyReadonlyArray1, PyReadonlyArray2};
-use ndarray::{Array2, ArrayView1, ArrayView2};
-
-/// Bounding box representation
-/// Performance is continuously tracked via automated benchmarks
-#[derive(Debug, Clone, Copy)]
-struct BBox {
-    x1: f32,
-    y1: f32,
-    x2: f32,
-    y2: f32,
-    score: f32,
-    index: usize,
-}
-
-impl BBox {
-    fn area(&self) -> f32 {
-        (self.x2 - self.x1).max(0.0) * (self.y2 - self.y1).max(0.0)
-    }
-
-    fn iou(&self, other: &BBox) -> f32 {
-        let inter_x1 = self.x1.max(other.x1);
-        let inter_y1 = self.y1.max(other.y1);
-        let inter_x2 = self.x2.min(other.x2);
-        let inter_y2 = self.y2.min(other.y2);
-
-        let inter_area = (inter_x2 - inter_x1).max(0.0) * (inter_y2 - inter_y1).max(0.0);
-        let union_area = self.area() + other.area() - inter_area;
-
-        if union_area > 0.0 {
-            inter_area / union_area
-        } else {
-            0.0
-        }
-    }
-}
+use ndarray::{ArrayView1, ArrayView2};
 
 /// Fast Non-Maximum Suppression implementation
 ///
@@ -48,43 +14,69 @@ impl BBox {
 /// * Array of indices of boxes to keep
 fn nms_impl(boxes: ArrayView2<f32>, scores: ArrayView1<f32>, iou_threshold: f32) -> Vec<usize> {
     let n = boxes.nrows();
-
     if n == 0 {
         return Vec::new();
     }
 
-    // Create bbox structs with scores
-    let mut bboxes: Vec<BBox> = (0..n)
-        .map(|i| BBox {
-            x1: boxes[[i, 0]],
-            y1: boxes[[i, 1]],
-            x2: boxes[[i, 2]],
-            y2: boxes[[i, 3]],
-            score: scores[i],
-            index: i,
+    // Pre-calculate areas to avoid re-computation in the loop
+    // Area = (x2 - x1) * (y2 - y1)
+    let areas: Vec<f32> = (0..n)
+        .map(|i| {
+            let w = (boxes[[i, 2]] - boxes[[i, 0]]).max(0.0);
+            let h = (boxes[[i, 3]] - boxes[[i, 1]]).max(0.0);
+            w * h
         })
         .collect();
 
-    // Sort by score descending
-    bboxes.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+    // Sort indices by score descending
+    // We use a vector of indices to avoid copying the bbox data
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_unstable_by(|&a, &b| {
+        scores[b]
+            .partial_cmp(&scores[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
-    let mut keep = Vec::new();
+    let mut keep = Vec::with_capacity(n / 10); // Heuristic pre-allocation
     let mut suppressed = vec![false; n];
 
     for i in 0..n {
-        if suppressed[i] {
+        let idx_i = order[i];
+        if suppressed[idx_i] {
             continue;
         }
 
-        keep.push(bboxes[i].index);
+        keep.push(idx_i);
+        
+        let x1_i = boxes[[idx_i, 0]];
+        let y1_i = boxes[[idx_i, 1]];
+        let x2_i = boxes[[idx_i, 2]];
+        let y2_i = boxes[[idx_i, 3]];
+        let area_i = areas[idx_i];
 
+        // Check against all subsequent (lower score) boxes
+        // Note: iterating j > i in the SORTED order
         for j in (i + 1)..n {
-            if suppressed[j] {
+            let idx_j = order[j];
+            if suppressed[idx_j] {
                 continue;
             }
 
-            if bboxes[i].iou(&bboxes[j]) > iou_threshold {
-                suppressed[j] = true;
+            // Calculate IoU
+            let inter_x1 = x1_i.max(boxes[[idx_j, 0]]);
+            let inter_y1 = y1_i.max(boxes[[idx_j, 1]]);
+            let inter_x2 = x2_i.min(boxes[[idx_j, 2]]);
+            let inter_y2 = y2_i.min(boxes[[idx_j, 3]]);
+
+            let w = (inter_x2 - inter_x1).max(0.0);
+            let h = (inter_y2 - inter_y1).max(0.0);
+            let inter_area = w * h;
+
+            if inter_area > 0.0 {
+                let union_area = area_i + areas[idx_j] - inter_area;
+                if union_area > 0.0 && (inter_area / union_area) > iou_threshold {
+                    suppressed[idx_j] = true;
+                }
             }
         }
     }
@@ -100,12 +92,20 @@ struct Point {
 }
 
 /// Moore-neighbor tracing for contour extraction
-/// Extracts contours from a binary mask using the Moore-neighbor algorithm
-fn trace_contour(mask: &Array2<bool>, start: Point) -> Vec<Point> {
+/// Extracts contours from a binary source using the Moore-neighbor algorithm
+fn trace_contour(
+    mask: ArrayView2<f32>,
+    threshold: f32,
+    start: Point,
+) -> Vec<Point> {
     let (height, width) = mask.dim();
-    let mut contour = Vec::new();
+    let h_i32 = height as i32;
+    let w_i32 = width as i32;
+    
+    let mut contour = Vec::with_capacity(100);
 
-    // 8-connected neighbors in clockwise order starting from top
+    // 8-connected neighbors in clockwise order starting from top (N)
+    // (dy, dx)
     let neighbors = [
         (-1, 0),  // N
         (-1, 1),  // NE
@@ -118,23 +118,27 @@ fn trace_contour(mask: &Array2<bool>, start: Point) -> Vec<Point> {
     ];
 
     let mut current = start;
-    let mut direction = 7; // Start looking from W
+    let mut direction = 7; // Start looking from West (since we entered from left/top)
+
+    // Safety limit to prevent infinite loops in pathological cases
+    let max_steps = (width * height) as usize;
 
     loop {
         contour.push(current);
 
         let mut found = false;
-        // Check 8 neighbors starting from the previous direction
+        // Check 8 neighbors in clockwise order
         for i in 0..8 {
             let check_dir = (direction + i) % 8;
             let (dy, dx) = neighbors[check_dir];
             let ny = current.y + dy;
             let nx = current.x + dx;
 
-            if ny >= 0 && ny < height as i32 && nx >= 0 && nx < width as i32 {
-                if mask[[ny as usize, nx as usize]] {
+            // Bounds check and threshold check
+            if ny >= 0 && ny < h_i32 && nx >= 0 && nx < w_i32 {
+                if mask[[ny as usize, nx as usize]] >= threshold {
                     current = Point { x: nx, y: ny };
-                    direction = (check_dir + 5) % 8; // Look from 90 degrees CCW next time
+                    direction = (check_dir + 5) % 8; 
                     found = true;
                     break;
                 }
@@ -145,8 +149,7 @@ fn trace_contour(mask: &Array2<bool>, start: Point) -> Vec<Point> {
             break;
         }
 
-        // Safety check to prevent infinite loops
-        if contour.len() > height * width {
+        if contour.len() >= max_steps {
             break;
         }
     }
@@ -154,59 +157,67 @@ fn trace_contour(mask: &Array2<bool>, start: Point) -> Vec<Point> {
     contour
 }
 
-/// Convert soft mask to segmentation polygons using marching squares-like approach
-///
-/// # Arguments
-/// * `mask` - HxW array of scores from 0.0 to 1.0
-/// * `threshold` - Threshold value for binarization (typically 0.5)
-/// * `min_area` - Minimum polygon area to keep (in pixels)
-///
-/// # Returns
-/// * Vector of polygons, where each polygon is a vector of (x, y) points
+/// Convert soft mask to segmentation polygons
 fn mask_to_polygons_impl(
     mask: ArrayView2<f32>,
     threshold: f32,
     min_area: usize,
 ) -> Vec<Vec<(f32, f32)>> {
     let (height, width) = mask.dim();
+    let h_i32 = height as i32;
+    let w_i32 = width as i32;
 
-    // Binarize the mask
-    let binary_mask: Array2<bool> = mask.map(|&v| v >= threshold);
-
-    let mut visited = Array2::from_elem((height, width), false);
+    // Use a 1D boolean vector for visited status
+    let mut visited = vec![false; height * width];
     let mut polygons = Vec::new();
+    
+    // Re-use stack to avoid allocation in loop
+    let mut stack = Vec::with_capacity(1024);
 
-    // Find all connected components
     for y in 0..height {
         for x in 0..width {
-            if binary_mask[[y, x]] && !visited[[y, x]] {
-                // Found a new component, trace its contour
+            let idx = y * width + x;
+            
+            // Check if pixel is solid and not visited
+            // We perform the check here to avoid function call overhead if not needed
+            if !visited[idx] && mask[[y, x]] >= threshold {
+                // Found a new component
+                
+                // 1. Trace contour
                 let start = Point { x: x as i32, y: y as i32 };
-                let contour = trace_contour(&binary_mask, start);
+                let contour = trace_contour(mask, threshold, start);
+                
+                // 2. Flood fill to mark this entire component as visited
+                // Optimization: Mark visited WHEN PUSHING to stack to avoid duplicates
+                stack.clear();
+                stack.push((y, x));
+                visited[idx] = true;
 
-                // Mark visited (flood fill the component)
-                let mut stack = vec![(y, x)];
                 while let Some((cy, cx)) = stack.pop() {
-                    if visited[[cy, cx]] {
-                        continue;
-                    }
-                    visited[[cy, cx]] = true;
+                    // Check 4 neighbors (sufficient for connectivity)
+                    // Inline neighbors
+                    let neighbors = [
+                        (cy as i32 - 1, cx as i32),
+                        (cy as i32 + 1, cx as i32),
+                        (cy as i32, cx as i32 - 1),
+                        (cy as i32, cx as i32 + 1)
+                    ];
 
-                    // Add neighbors to stack
-                    for (dy, dx) in [(-1, 0), (1, 0), (0, -1), (0, 1)].iter() {
-                        let ny = cy as i32 + dy;
-                        let nx = cx as i32 + dx;
-                        if ny >= 0 && ny < height as i32 && nx >= 0 && nx < width as i32 {
-                            let ny = ny as usize;
-                            let nx = nx as usize;
-                            if binary_mask[[ny, nx]] && !visited[[ny, nx]] {
+                    for &(ny_i, nx_i) in &neighbors {
+                        if ny_i >= 0 && ny_i < h_i32 && nx_i >= 0 && nx_i < w_i32 {
+                            let ny = ny_i as usize;
+                            let nx = nx_i as usize;
+                            let nidx = ny * width + nx;
+                            
+                            if !visited[nidx] && mask[[ny, nx]] >= threshold {
+                                visited[nidx] = true; // Mark immediately!
                                 stack.push((ny, nx));
                             }
                         }
                     }
                 }
 
-                // Convert contour to polygon and filter by area
+                // 3. Convert to polygon and filter
                 if contour.len() >= min_area {
                     let polygon: Vec<(f32, f32)> = contour
                         .iter()
@@ -277,42 +288,7 @@ fn rust_nms(_py: Python, m: &PyModule) -> PyResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ndarray::array;
-
-    #[test]
-    fn test_bbox_area() {
-        let bbox = BBox {
-            x1: 0.0,
-            y1: 0.0,
-            x2: 10.0,
-            y2: 10.0,
-            score: 0.9,
-            index: 0,
-        };
-        assert_eq!(bbox.area(), 100.0);
-    }
-
-    #[test]
-    fn test_bbox_iou() {
-        let bbox1 = BBox {
-            x1: 0.0,
-            y1: 0.0,
-            x2: 10.0,
-            y2: 10.0,
-            score: 0.9,
-            index: 0,
-        };
-        let bbox2 = BBox {
-            x1: 5.0,
-            y1: 5.0,
-            x2: 15.0,
-            y2: 15.0,
-            score: 0.8,
-            index: 1,
-        };
-        let iou = bbox1.iou(&bbox2);
-        assert!((iou - 0.142857).abs() < 0.001); // 25 / 175
-    }
+    use ndarray::{array, Array2};
 
     #[test]
     fn test_nms_basic() {
@@ -324,9 +300,20 @@ mod tests {
         let scores = array![0.9, 0.8, 0.95];
 
         let keep = nms_impl(boxes.view(), scores.view(), 0.5);
-        assert_eq!(keep.len(), 2);
-        assert!(keep.contains(&0) || keep.contains(&1));
+        
+        // Should keep index 2 (score 0.95) and index 0 (score 0.9)
+        // Index 1 (score 0.8) overlaps with index 0 (IoU > 0.5) so it should be suppressed
         assert!(keep.contains(&2));
+        assert!(keep.contains(&0));
+        assert!(!keep.contains(&1));
+    }
+    
+    #[test]
+    fn test_nms_empty() {
+        let boxes = Array2::<f32>::zeros((0, 4));
+        let scores = ArrayView1::<f32>::from(&[]);
+        let keep = nms_impl(boxes.view(), scores, 0.5);
+        assert!(keep.is_empty());
     }
 
     #[test]
@@ -339,6 +326,23 @@ mod tests {
         ];
 
         let polygons = mask_to_polygons_impl(mask.view(), 0.5, 1);
-        assert!(!polygons.is_empty());
+        assert_eq!(polygons.len(), 1);
+        // Square has 4 corners + duplicate start point sometimes depending on trace
+        // Trace: (1,1) -> (1,2) -> (2,2) -> (2,1) -> (1,1)
+        assert!(polygons[0].len() >= 4);
+    }
+    
+    #[test]
+    fn test_mask_complex_shape() {
+        // C-shape
+        let mask = array![
+            [0.0, 0.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 1.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 1.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 0.0, 0.0],
+        ];
+        let polygons = mask_to_polygons_impl(mask.view(), 0.5, 1);
+        assert_eq!(polygons.len(), 1);
     }
 }
