@@ -56,8 +56,8 @@ fn nms_impl(boxes: ArrayView2<f32>, scores: ArrayView1<f32>, iou_threshold: f32)
 
         // Check against all subsequent (lower score) boxes
         // Note: iterating j > i in the SORTED order
-        for j in (i + 1)..n {
-            let idx_j = order[j];
+        // Optimization: Iterate directly over the slice of remaining indices
+        for &idx_j in &order[(i + 1)..] {
             if suppressed[idx_j] {
                 continue;
             }
@@ -82,6 +82,101 @@ fn nms_impl(boxes: ArrayView2<f32>, scores: ArrayView1<f32>, iou_threshold: f32)
     }
 
     keep
+}
+
+enum SoftNmsMethod {
+    Linear,
+    Gaussian,
+}
+
+fn soft_nms_impl(
+    boxes: ArrayView2<f32>,
+    scores: ArrayView1<f32>,
+    method: SoftNmsMethod,
+    sigma: f32,
+    iou_threshold: f32,
+    score_threshold: f32,
+) -> (Vec<usize>, Vec<f32>) {
+    let n = boxes.nrows();
+    let mut updated_scores = scores.to_vec();
+    let mut indices: Vec<usize> = (0..n).collect();
+    let mut keep = Vec::with_capacity(n);
+
+    // Pre-calculate areas
+    let areas: Vec<f32> = (0..n)
+        .map(|i| {
+            let w = (boxes[[i, 2]] - boxes[[i, 0]]).max(0.0);
+            let h = (boxes[[i, 3]] - boxes[[i, 1]]).max(0.0);
+            w * h
+        })
+        .collect();
+
+    for i in 0..n {
+        // Find max score among remaining indices (i..n)
+        let mut max_score = -f32::INFINITY;
+        let mut max_pos = i;
+
+        for (pos, &idx) in indices.iter().enumerate().skip(i) {
+            let s = updated_scores[idx];
+            if s > max_score {
+                max_score = s;
+                max_pos = pos;
+            }
+        }
+
+        // Swap the best box to position i
+        indices.swap(i, max_pos);
+        let current_idx = indices[i];
+        let current_score = updated_scores[current_idx];
+
+        if current_score < score_threshold {
+            break;
+        }
+
+        keep.push(current_idx);
+
+        let x1 = boxes[[current_idx, 0]];
+        let y1 = boxes[[current_idx, 1]];
+        let x2 = boxes[[current_idx, 2]];
+        let y2 = boxes[[current_idx, 3]];
+        let area = areas[current_idx];
+
+        // Update scores of remaining boxes
+        for &idx in &indices[(i + 1)..] {
+            let inter_x1 = x1.max(boxes[[idx, 0]]);
+            let inter_y1 = y1.max(boxes[[idx, 1]]);
+            let inter_x2 = x2.min(boxes[[idx, 2]]);
+            let inter_y2 = y2.min(boxes[[idx, 3]]);
+
+            let w = (inter_x2 - inter_x1).max(0.0);
+            let h = (inter_y2 - inter_y1).max(0.0);
+            let inter_area = w * h;
+
+            let mut iou = 0.0;
+            if inter_area > 0.0 {
+                let union = area + areas[idx] - inter_area;
+                if union > 0.0 {
+                    iou = inter_area / union;
+                }
+            }
+
+            let weight = match method {
+                SoftNmsMethod::Linear => {
+                    if iou > iou_threshold {
+                        1.0 - iou
+                    } else {
+                        1.0
+                    }
+                }
+                SoftNmsMethod::Gaussian => (-iou * iou / sigma).exp(),
+            };
+
+            updated_scores[idx] *= weight;
+        }
+    }
+    
+    let kept_scores = keep.iter().map(|&idx| updated_scores[idx]).collect();
+    (keep, kept_scores)
 }
 
 /// Contour point for polygon extraction
@@ -121,7 +216,7 @@ fn trace_contour(
     let mut direction = 7; // Start looking from West (since we entered from left/top)
 
     // Safety limit to prevent infinite loops in pathological cases
-    let max_steps = (width * height) as usize;
+    let max_steps = width * height;
 
     loop {
         contour.push(current);
@@ -135,13 +230,11 @@ fn trace_contour(
             let nx = current.x + dx;
 
             // Bounds check and threshold check
-            if ny >= 0 && ny < h_i32 && nx >= 0 && nx < w_i32 {
-                if mask[[ny as usize, nx as usize]] >= threshold {
-                    current = Point { x: nx, y: ny };
-                    direction = (check_dir + 5) % 8; 
-                    found = true;
-                    break;
-                }
+            if ny >= 0 && ny < h_i32 && nx >= 0 && nx < w_i32 && mask[[ny as usize, nx as usize]] >= threshold {
+                current = Point { x: nx, y: ny };
+                direction = (check_dir + 5) % 8; 
+                found = true;
+                break;
             }
         }
 
@@ -259,6 +352,49 @@ fn nms<'py>(
     Ok(PyArray1::from_vec(py, keep))
 }
 
+/// Python wrapper for Soft-NMS
+#[pyfunction]
+#[pyo3(signature = (boxes, scores, method="linear", sigma=0.5, iou_threshold=0.3, score_threshold=0.001))]
+fn soft_nms<'py>(
+    py: Python<'py>,
+    boxes: PyReadonlyArray2<f32>,
+    scores: PyReadonlyArray1<f32>,
+    method: &str,
+    sigma: f32,
+    iou_threshold: f32,
+    score_threshold: f32,
+) -> PyResult<(&'py PyArray1<usize>, &'py PyArray1<f32>)> {
+    let boxes_view = boxes.as_array();
+    let scores_view = scores.as_array();
+
+    if boxes_view.ncols() != 4 {
+        return Err(PyValueError::new_err("boxes must have shape (N, 4)"));
+    }
+    if boxes_view.nrows() != scores_view.len() {
+        return Err(PyValueError::new_err("boxes and scores must have same length"));
+    }
+
+    let method_enum = match method {
+        "linear" => SoftNmsMethod::Linear,
+        "gaussian" => SoftNmsMethod::Gaussian,
+        _ => return Err(PyValueError::new_err("method must be 'linear' or 'gaussian'")),
+    };
+
+    let (indices, new_scores) = soft_nms_impl(
+        boxes_view,
+        scores_view,
+        method_enum,
+        sigma,
+        iou_threshold,
+        score_threshold,
+    );
+
+    Ok((
+        PyArray1::from_vec(py, indices),
+        PyArray1::from_vec(py, new_scores),
+    ))
+}
+
 /// Python wrapper for mask to polygons conversion
 #[pyfunction]
 #[pyo3(signature = (mask, threshold=0.5, min_area=10))]
@@ -269,7 +405,7 @@ fn mask_to_polygons(
 ) -> PyResult<Vec<Vec<(f32, f32)>>> {
     let mask_view = mask.as_array();
 
-    if threshold < 0.0 || threshold > 1.0 {
+    if !(0.0..=1.0).contains(&threshold) {
         return Err(PyValueError::new_err("threshold must be between 0 and 1"));
     }
 
@@ -281,6 +417,7 @@ fn mask_to_polygons(
 #[pymodule]
 fn rust_nms(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(nms, m)?)?;
+    m.add_function(wrap_pyfunction!(soft_nms, m)?)?;
     m.add_function(wrap_pyfunction!(mask_to_polygons, m)?)?;
     Ok(())
 }
@@ -344,5 +481,61 @@ mod tests {
         ];
         let polygons = mask_to_polygons_impl(mask.view(), 0.5, 1);
         assert_eq!(polygons.len(), 1);
+    }
+
+    #[test]
+    fn test_soft_nms_linear() {
+        let boxes = array![
+            [0.0, 0.0, 10.0, 10.0],
+            [0.0, 0.0, 10.0, 10.0], // Exact overlap
+        ];
+        let scores = array![0.9, 0.8];
+        
+        // With linear soft NMS, the second box (score 0.8) has IoU 1.0 with the first.
+        // Weight = 1.0 - 1.0 = 0.0
+        // New score = 0.8 * 0.0 = 0.0
+        // If score_threshold is 0.001, it should be dropped
+        
+        let (indices, new_scores) = soft_nms_impl(
+            boxes.view(), 
+            scores.view(), 
+            SoftNmsMethod::Linear, 
+            0.5, 
+            0.3, 
+            0.001
+        );
+        
+        assert_eq!(indices.len(), 1);
+        assert_eq!(indices[0], 0);
+        assert!((new_scores[0] - 0.9).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_soft_nms_gaussian() {
+        let boxes = array![
+            [0.0, 0.0, 10.0, 10.0],
+            [1.0, 1.0, 11.0, 11.0], // High overlap
+        ];
+        let scores = array![0.9, 0.8];
+        
+        // Gaussian decay
+        // IoU ~ 0.68
+        // Weight = exp(-0.68^2 / 0.5) = exp(-0.4624 / 0.5) = exp(-0.9248) ~= 0.396
+        // New score = 0.8 * 0.396 ~= 0.317
+        // Should keep both if threshold is low
+        
+        let (indices, new_scores) = soft_nms_impl(
+            boxes.view(), 
+            scores.view(), 
+            SoftNmsMethod::Gaussian, 
+            0.5, 
+            0.3, 
+            0.1
+        );
+        
+        assert_eq!(indices.len(), 2);
+        assert_eq!(indices[0], 0); // First one is highest score
+        assert_eq!(indices[1], 1);
+        assert!(new_scores[1] < 0.8); // Score should decay
     }
 }
