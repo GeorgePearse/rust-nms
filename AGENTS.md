@@ -6,21 +6,28 @@
 
 This repository has **STRICT pre-commit hooks** that will **REJECT your commit** unless you meet both of these requirements:
 
+> **🚨 IMPORTANT:** Commits are AUTOMATICALLY REJECTED if benchmarks don't show performance improvements. The pre-commit hook compares your changes against the previous commit and blocks any commit that doesn't make the code measurably faster.
+
 ### 1. All Tests Must Pass
 ```bash
 cargo test --quiet
 ```
 
-### 2. Performance Must Improve (NOT regress or stay the same)
+### 2. Benchmarks MUST Show Performance Improvement
 
-The pre-commit hook runs benchmarks comparing your changes against `HEAD~1` (the previous commit). Your commit will be **REJECTED** if:
+**CRITICAL REQUIREMENT:** The pre-commit hook runs benchmarks comparing your changes against `HEAD~1` (the previous commit).
+
+**Your commit will be REJECTED if:**
 - ❌ Any benchmark shows a **regression** (slower performance)
 - ❌ **No benchmarks show improvement** (same performance as before)
+- ❌ Benchmarks show identical performance to the previous commit
 
-Your commit will be **ACCEPTED** only if:
-- ✅ At least one benchmark shows **measurable improvement**
-- ✅ No benchmarks show regressions
+**Your commit will be ACCEPTED only if:**
+- ✅ **At least one benchmark shows measurable improvement** (faster execution)
+- ✅ **No benchmarks show regressions** (none can be slower)
 - ✅ All tests pass
+
+**This means:** Every commit MUST make the code measurably faster. The benchmark comparison script will automatically run during `git commit` and will block commits that don't improve performance. There is no way to commit code that doesn't show benchmark improvements except by using `git commit --no-verify` (not recommended).
 
 ### What This Means for Agents
 
@@ -47,14 +54,22 @@ Your commit will be **ACCEPTED** only if:
 ./scripts/benchmark-compare.sh
 ```
 
-### Benchmark Thresholds
+### How Benchmark Validation Works
 
-The benchmark comparison script (`scripts/benchmark-compare.sh`) will:
-1. Stash your changes
-2. Run benchmarks on `HEAD~1` (previous commit)
-3. Return to current state
-4. Run benchmarks on your changes
-5. Compare results and fail if no improvements detected
+The benchmark comparison script (`scripts/benchmark-compare.sh`) automatically runs during `git commit` and performs these steps:
+
+1. **Stash your uncommitted changes** (if any)
+2. **Checkout HEAD~1** and run benchmarks on the previous commit
+3. **Return to your current changes** and run benchmarks
+4. **Compare the results:**
+   - If any benchmark is slower → **REJECT commit**
+   - If no benchmark is faster → **REJECT commit**
+   - If at least one benchmark is faster and none are slower → **ACCEPT commit**
+5. **Restore your working state**
+
+**Special cases:**
+- If HEAD~1 has no benchmarks (e.g., first commit with benchmark infrastructure), the check is skipped
+- The script compares execution times and looks for "faster" or "slower" indicators in benchmark output
 
 ### Tips for Success
 
