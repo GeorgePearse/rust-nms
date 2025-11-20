@@ -5,6 +5,7 @@ Fast Rust implementation of Non-Maximum Suppression (NMS) and soft mask to polyg
 ## Features
 
 - **Fast NMS**: Efficient Non-Maximum Suppression for bounding box filtering
+- **Soft-NMS**: Decays scores of overlapping boxes instead of suppressing them (Linear/Gaussian)
 - **Mask to Polygons**: Convert soft segmentation masks (0-1 scores) to polygon contours
 - **Python Bindings**: Seamless integration with NumPy arrays
 - **Zero-Copy**: Efficient memory usage with array views
@@ -56,6 +57,23 @@ filtered_boxes = boxes[keep_indices]
 filtered_scores = scores[keep_indices]
 ```
 
+### Soft-NMS
+
+```python
+# Returns indices and updated scores
+indices, new_scores = rust_nms.soft_nms(
+    boxes, 
+    scores, 
+    method="gaussian",  # or "linear"
+    sigma=0.5,          # for gaussian
+    iou_threshold=0.3,  # for linear
+    score_threshold=0.001
+)
+
+final_boxes = boxes[indices]
+final_scores = new_scores
+```
+
 ### Soft Mask to Polygons
 
 ```python
@@ -86,13 +104,20 @@ Non-Maximum Suppression for bounding boxes.
 **Returns:**
 - `np.ndarray[uint]` - Indices of boxes to keep
 
-**Algorithm:**
-1. Sort boxes by score (descending)
-2. Iteratively select highest scoring box
-3. Suppress overlapping boxes above IoU threshold
-4. Return indices of non-suppressed boxes
+### `soft_nms(boxes, scores, method="linear", sigma=0.5, iou_threshold=0.3, score_threshold=0.001)`
 
-**Time Complexity:** O(N²) worst case, typically much faster
+Soft Non-Maximum Suppression. Decays scores of overlapping boxes.
+
+**Parameters:**
+- `boxes`: `np.ndarray[float32]` - Shape (N, 4)
+- `scores`: `np.ndarray[float32]` - Shape (N,)
+- `method`: `str` - "linear" or "gaussian" (default: "linear")
+- `sigma`: `float` - Sigma for Gaussian method (default: 0.5)
+- `iou_threshold`: `float` - IoU threshold for Linear method (default: 0.3)
+- `score_threshold`: `float` - Minimum score to keep (default: 0.001)
+
+**Returns:**
+- `Tuple[np.ndarray[uint], np.ndarray[float32]]` - (indices, updated_scores)
 
 ### `mask_to_polygons(mask, threshold=0.5, min_area=10)`
 
