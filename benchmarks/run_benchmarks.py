@@ -233,42 +233,6 @@ def benchmark_nms_coco(boxes: np.ndarray, scores: np.ndarray, n_boxes: int, n_ru
     }
 
 
-def benchmark_soft_nms_coco(boxes: np.ndarray, scores: np.ndarray, n_boxes: int, method: str = "linear", n_runs: int = 5) -> Dict[str, float]:
-    """
-    Benchmark Soft-NMS operation using COCO data.
-    """
-    if n_boxes > len(boxes):
-        n_boxes = len(boxes)
-
-    indices = np.random.choice(len(boxes), size=n_boxes, replace=False)
-    test_boxes = boxes[indices].copy()
-    test_scores = scores[indices].copy()
-
-    # Warm-up run
-    _ = rust_nms.soft_nms(test_boxes, test_scores, method=method, sigma=0.5, iou_threshold=0.3, score_threshold=0.001)
-
-    # Benchmark runs
-    times = []
-    for _ in range(n_runs):
-        start = time.perf_counter()
-        _ = rust_nms.soft_nms(test_boxes, test_scores, method=method, sigma=0.5, iou_threshold=0.3, score_threshold=0.001)
-        elapsed = time.perf_counter() - start
-        times.append(elapsed)
-
-    times = np.array(times)
-    avg_time = np.mean(times)
-
-    return {
-        "time_ms": avg_time * 1000,
-        "time_std_ms": np.std(times) * 1000,
-        "throughput_boxes_per_sec": n_boxes / avg_time,
-        "n_boxes": n_boxes,
-        "method": method,
-        "n_runs": n_runs,
-        "dataset": "coco_train2017",
-    }
-
-
 def benchmark_mask_to_polygons(size: int, n_runs: int = 5) -> Dict[str, float]:
     """
     Benchmark mask_to_polygons operation.
@@ -355,26 +319,20 @@ def run_all_benchmarks() -> Dict[str, Any]:
         print(f"  Throughput: {result['throughput_boxes_per_sec']:,.0f} boxes/sec")
         print(f"  Kept: {result['n_kept']} boxes")
 
-    # Soft-NMS Benchmarks
-    soft_nms_sizes = [10000] # Just one size for now
-    for n_boxes in soft_nms_sizes:
-        if n_boxes > max_boxes:
-            continue
-        
-        print(f"\nBenchmarking Soft-NMS (Linear) with {n_boxes:,} boxes...")
-        result = benchmark_soft_nms_coco(all_boxes, all_scores, n_boxes, method="linear")
-        results["benchmarks"][f"soft_nms_linear_{n_boxes}"] = result
-        print(f"  Time: {result['time_ms']:.2f} ± {result['time_std_ms']:.2f} ms")
-        print(f"  Throughput: {result['throughput_boxes_per_sec']:,.0f} boxes/sec")
-
-        print(f"\nBenchmarking Soft-NMS (Gaussian) with {n_boxes:,} boxes...")
-        result = benchmark_soft_nms_coco(all_boxes, all_scores, n_boxes, method="gaussian")
-        results["benchmarks"][f"soft_nms_gaussian_{n_boxes}"] = result
-        print(f"  Time: {result['time_ms']:.2f} ± {result['time_std_ms']:.2f} ms")
-        print(f"  Throughput: {result['throughput_boxes_per_sec']:,.0f} boxes/sec")
-
     # Mask to polygons benchmarks
     mask_sizes = [256, 512, 1024]
+    for size in mask_sizes:
+        print(f"\nBenchmarking mask_to_polygons with {size}x{size} mask...")
+        result = benchmark_mask_to_polygons(size)
+        results["benchmarks"][f"mask_to_polygons_{size}"] = result
+        print(f"  Time: {result['time_ms']:.2f} ± {result['time_std_ms']:.2f} ms")
+        print(f"  Throughput: {result['throughput_megapixels_per_sec']:.1f} megapixels/sec")
+        print(f"  Polygons: {result['n_polygons']}")
+
+    print("\n" + "=" * 60)
+    print("Benchmarks complete!")
+
+    return results
     for size in mask_sizes:
         print(f"\nBenchmarking mask_to_polygons with {size}x{size} mask...")
         result = benchmark_mask_to_polygons(size)

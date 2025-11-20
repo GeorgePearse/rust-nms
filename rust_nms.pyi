@@ -19,30 +19,6 @@ def nms(
     """
     ...
 
-def soft_nms(
-    boxes: np.ndarray,
-    scores: np.ndarray,
-    method: str = "linear",
-    sigma: float = 0.5,
-    iou_threshold: float = 0.3,
-    score_threshold: float = 0.001
-) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Soft Non-Maximum Suppression.
-    
-    Args:
-        boxes: (N, 4) float32 array
-        scores: (N,) float32 array
-        method: 'linear' or 'gaussian'
-        sigma: Gaussian sigma
-        iou_threshold: Linear method threshold
-        score_threshold: Minimum score to keep
-        
-    Returns:
-        Tuple of (indices, new_scores)
-    """
-    ...
-
 def mask_to_polygons(
     mask: np.ndarray, 
     threshold: float = 0.5, 
