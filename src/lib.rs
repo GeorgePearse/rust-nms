@@ -41,41 +41,44 @@ fn nms_impl(boxes: ArrayView2<f32>, scores: ArrayView1<f32>, iou_threshold: f32)
     let mut suppressed = vec![false; n];
 
     for i in 0..n {
-        let idx_i = order[i];
-        if suppressed[idx_i] {
+        // SAFETY: i < n, and order has length n.
+        let idx_i = unsafe { *order.get_unchecked(i) };
+        if unsafe { *suppressed.get_unchecked(idx_i) } {
             continue;
         }
 
         keep.push(idx_i);
         
-        let x1_i = boxes[[idx_i, 0]];
-        let y1_i = boxes[[idx_i, 1]];
-        let x2_i = boxes[[idx_i, 2]];
-        let y2_i = boxes[[idx_i, 3]];
-        let area_i = areas[idx_i];
+        // SAFETY: idx_i < n, boxes is Nx4
+        let x1_i = unsafe { *boxes.uget((idx_i, 0)) };
+        let y1_i = unsafe { *boxes.uget((idx_i, 1)) };
+        let x2_i = unsafe { *boxes.uget((idx_i, 2)) };
+        let y2_i = unsafe { *boxes.uget((idx_i, 3)) };
+        let area_i = unsafe { *areas.get_unchecked(idx_i) };
 
         // Check against all subsequent (lower score) boxes
         // Note: iterating j > i in the SORTED order
         // Optimization: Iterate directly over the slice of remaining indices
         for &idx_j in &order[(i + 1)..] {
-            if suppressed[idx_j] {
+            if unsafe { *suppressed.get_unchecked(idx_j) } {
                 continue;
             }
 
+            // SAFETY: idx_j < n, boxes is Nx4
             // Calculate IoU
-            let inter_x1 = x1_i.max(boxes[[idx_j, 0]]);
-            let inter_y1 = y1_i.max(boxes[[idx_j, 1]]);
-            let inter_x2 = x2_i.min(boxes[[idx_j, 2]]);
-            let inter_y2 = y2_i.min(boxes[[idx_j, 3]]);
+            let inter_x1 = x1_i.max(unsafe { *boxes.uget((idx_j, 0)) });
+            let inter_y1 = y1_i.max(unsafe { *boxes.uget((idx_j, 1)) });
+            let inter_x2 = x2_i.min(unsafe { *boxes.uget((idx_j, 2)) });
+            let inter_y2 = y2_i.min(unsafe { *boxes.uget((idx_j, 3)) });
 
             let w = (inter_x2 - inter_x1).max(0.0);
             let h = (inter_y2 - inter_y1).max(0.0);
             let inter_area = w * h;
 
             if inter_area > 0.0 {
-                let union_area = area_i + areas[idx_j] - inter_area;
+                let union_area = area_i + unsafe { *areas.get_unchecked(idx_j) } - inter_area;
                 if union_area > 0.0 && (inter_area / union_area) > iou_threshold {
-                    suppressed[idx_j] = true;
+                    unsafe { *suppressed.get_unchecked_mut(idx_j) = true; }
                 }
             }
         }
@@ -93,6 +96,7 @@ struct Point {
 
 /// Moore-neighbor tracing for contour extraction
 /// Extracts contours from a binary source using the Moore-neighbor algorithm
+#[inline]
 fn trace_contour(
     mask: ArrayView2<f32>,
     threshold: f32,
@@ -130,16 +134,22 @@ fn trace_contour(
         // Check 8 neighbors in clockwise order
         for i in 0..8 {
             let check_dir = (direction + i) % 8;
-            let (dy, dx) = neighbors[check_dir];
+            // SAFETY: neighbors is constant size 8
+            let (dy, dx) = unsafe { *neighbors.get_unchecked(check_dir) };
             let ny = current.y + dy;
             let nx = current.x + dx;
 
             // Bounds check and threshold check
-            if ny >= 0 && ny < h_i32 && nx >= 0 && nx < w_i32 && mask[[ny as usize, nx as usize]] >= threshold {
-                current = Point { x: nx, y: ny };
-                direction = (check_dir + 5) % 8; 
-                found = true;
-                break;
+            // Note: Bounds checking is necessary, but once checked, array access can be unsafe
+            if ny >= 0 && ny < h_i32 && nx >= 0 && nx < w_i32 {
+                // SAFETY: we checked bounds above
+                let val = unsafe { *mask.uget((ny as usize, nx as usize)) };
+                if val >= threshold {
+                    current = Point { x: nx, y: ny };
+                    direction = (check_dir + 5) % 8; 
+                    found = true;
+                    break;
+                }
             }
         }
 
@@ -178,52 +188,62 @@ fn mask_to_polygons_impl(
             
             // Check if pixel is solid and not visited
             // We perform the check here to avoid function call overhead if not needed
-            if !visited[idx] && mask[[y, x]] >= threshold {
-                // Found a new component
-                
-                // 1. Trace contour
-                let start = Point { x: x as i32, y: y as i32 };
-                let contour = trace_contour(mask, threshold, start);
-                
-                // 2. Flood fill to mark this entire component as visited
-                // Optimization: Mark visited WHEN PUSHING to stack to avoid duplicates
-                stack.clear();
-                stack.push((y, x));
-                visited[idx] = true;
+            // SAFETY: idx < height*width
+            if unsafe { !*visited.get_unchecked(idx) } {
+                // SAFETY: y < height, x < width
+                let val = unsafe { *mask.uget((y, x)) };
+                if val >= threshold {
+                    // Found a new component
+                    
+                    // 1. Trace contour
+                    let start = Point { x: x as i32, y: y as i32 };
+                    let contour = trace_contour(mask, threshold, start);
+                    
+                    // 2. Flood fill to mark this entire component as visited
+                    // Optimization: Mark visited WHEN PUSHING to stack to avoid duplicates
+                    stack.clear();
+                    stack.push((y, x));
+                    unsafe { *visited.get_unchecked_mut(idx) = true; }
 
-                while let Some((cy, cx)) = stack.pop() {
-                    // Check 4 neighbors (sufficient for connectivity)
-                    // Inline neighbors
-                    let neighbors = [
-                        (cy as i32 - 1, cx as i32),
-                        (cy as i32 + 1, cx as i32),
-                        (cy as i32, cx as i32 - 1),
-                        (cy as i32, cx as i32 + 1)
-                    ];
+                    while let Some((cy, cx)) = stack.pop() {
+                        // Check 4 neighbors (sufficient for connectivity)
+                        // Inline neighbors
+                        let neighbors = [
+                            (cy as i32 - 1, cx as i32),
+                            (cy as i32 + 1, cx as i32),
+                            (cy as i32, cx as i32 - 1),
+                            (cy as i32, cx as i32 + 1)
+                        ];
 
-                    for &(ny_i, nx_i) in &neighbors {
-                        if ny_i >= 0 && ny_i < h_i32 && nx_i >= 0 && nx_i < w_i32 {
-                            let ny = ny_i as usize;
-                            let nx = nx_i as usize;
-                            let nidx = ny * width + nx;
-                            
-                            if !visited[nidx] && mask[[ny, nx]] >= threshold {
-                                visited[nidx] = true; // Mark immediately!
-                                stack.push((ny, nx));
+                        for &(ny_i, nx_i) in &neighbors {
+                            if ny_i >= 0 && ny_i < h_i32 && nx_i >= 0 && nx_i < w_i32 {
+                                let ny = ny_i as usize;
+                                let nx = nx_i as usize;
+                                let nidx = ny * width + nx;
+                                
+                                // SAFETY: nidx < height*width
+                                if unsafe { !*visited.get_unchecked(nidx) } {
+                                    // SAFETY: ny < height, nx < width
+                                    let val = unsafe { *mask.uget((ny, nx)) };
+                                    if val >= threshold {
+                                        unsafe { *visited.get_unchecked_mut(nidx) = true; }
+                                        stack.push((ny, nx));
+                                    }
+                                }
                             }
                         }
                     }
-                }
 
-                // 3. Convert to polygon and filter
-                if contour.len() >= min_area {
-                    let polygon: Vec<(f32, f32)> = contour
-                        .iter()
-                        .map(|p| (p.x as f32, p.y as f32))
-                        .collect();
+                    // 3. Convert to polygon and filter
+                    if contour.len() >= min_area {
+                        let polygon: Vec<(f32, f32)> = contour
+                            .iter()
+                            .map(|p| (p.x as f32, p.y as f32))
+                            .collect();
 
-                    if !polygon.is_empty() {
-                        polygons.push(polygon);
+                        if !polygon.is_empty() {
+                            polygons.push(polygon);
+                        }
                     }
                 }
             }
