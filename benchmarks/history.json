@@ -114,5 +114,63 @@
         "n_runs": 5
       }
     }
+  },
+  {
+    "timestamp": "2025-11-21T00:01:07.808118+00:00",
+    "commit": "8d4a73148602841269d829db8fed87a20ed563d3",
+    "branch": "main",
+    "benchmarks": {
+      "nms_1000": {
+        "time_ms": 0.4645799999934752,
+        "time_std_ms": 0.0319937804242631,
+        "throughput_boxes_per_sec": 2152481.811558923,
+        "n_boxes": 1000,
+        "n_kept": 812,
+        "n_runs": 5,
+        "dataset": "coco_train2017"
+      },
+      "nms_10000": {
+        "time_ms": 6.179139400023814,
+        "time_std_ms": 0.018165099628994496,
+        "throughput_boxes_per_sec": 1618348.341512001,
+        "n_boxes": 10000,
+        "n_kept": 6848,
+        "n_runs": 5,
+        "dataset": "coco_train2017"
+      },
+      "nms_85435": {
+        "time_ms": 76.30723000004309,
+        "time_std_ms": 0.17228986162682255,
+        "throughput_boxes_per_sec": 1119618.678334304,
+        "n_boxes": 85435,
+        "n_kept": 47235,
+        "n_runs": 5,
+        "dataset": "coco_train2017"
+      },
+      "mask_to_polygons_256": {
+        "time_ms": 166.75861239993992,
+        "time_std_ms": 17.617819670197118,
+        "throughput_megapixels_per_sec": 0.39299919240647035,
+        "size": "256x256",
+        "n_polygons": 1071,
+        "n_runs": 5
+      },
+      "mask_to_polygons_512": {
+        "time_ms": 718.454458999986,
+        "time_std_ms": 104.38470276464412,
+        "throughput_megapixels_per_sec": 0.3648721178025358,
+        "size": "512x512",
+        "n_polygons": 9032,
+        "n_runs": 5
+      },
+      "mask_to_polygons_1024": {
+        "time_ms": 8045.181911599979,
+        "time_std_ms": 1194.780177255368,
+        "throughput_megapixels_per_sec": 0.1303358968786158,
+        "size": "1024x1024",
+        "n_polygons": 44486,
+        "n_runs": 5
+      }
+    }
   }
 ]
